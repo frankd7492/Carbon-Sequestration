@@ -1,0 +1,281 @@
+---
+title: "Carbon Project"
+author: "Frank D'Ambrosio"
+date: "11/26/2021"
+output: html_document
+---
+
+```{r}
+library(mice) 
+library(VIM)
+library(lcsm)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(stringr)
+library(lme4)
+library(nlme)
+library(lattice)
+library(tree)
+
+
+
+
+```
+
+
+get data in
+```{r}
+set.seed(7492)
+carbon <- read.csv("C:/Users/gwcre/Desktop/Applied_statistics/Consulting/Group_Project5/Carbon_cleaned.csv" , header  = T)
+
+#carbon
+
+#want field and switched as categorical 
+carbon$ï..Field <- as.factor(carbon$ï..Field)
+carbon$switched <- as.factor(carbon$switched)
+carbon$Year <- as.factor(carbon$Year)
+carbon$Crop <- as.factor(carbon$Crop)
+#levels(carbon$ï..Field)
+
+```
+  
+want to deal with missing values by imputation 
+```{r}
+
+aggr(carbon)
+#good only carbon has missing values
+carbon2 <- carbon #data maintaining missingness
+
+m <- 5
+carbon.i <- mice(carbon, m, method = "cart" , maxit = 20)
+
+carbon.imp <- complete(carbon.i)
+
+summary(carbon.imp)
+#aggr(carbon.imp) #no more missing values
+
+#combine the data sets
+
+#carbon.imp
+
+#Years.S.1976 is a long name lets shorten it to make it easier to read
+carbon.imp$time <- carbon.imp$Years.S.1976
+
+
+```
+
+test for significance of variables
+```{r}
+# g <- lm(carbon.imp$Org.C ~ carbon.imp$Years.S.1976 + carbon.imp$Crop + carbon.imp$switched)
+# anova(g)
+# shapiro.test(g$residuals)
+# #xvar <- c(carbon.imp$Years.S.1976, carbon.imp$Crop, carbon.imp$switched)
+kruskal.test(carbon.imp$Org.C , carbon.imp$time)
+kruskal.test(carbon.imp$Org.C , carbon.imp$Crop)
+# #length(carbon.imp$Org.C)
+# #length(carbon.imp$Years.S.1976)
+# #length(carbon.imp$Crop)
+# #length(carbon.imp$switched)
+pairwise.wilcox.test(carbon.imp$Org.C, carbon.imp$Crop, paired = F, p.adjust.method = "bonferroni")
+pairwise.wilcox.test(carbon.imp$Org.C, carbon.imp$Crop, paired = F, p.adjust.method = "holm")
+```
+why are crop and pasture not significantly different? lets look at amount of data available
+```{r}
+table(carbon.imp$Crop)
+
+
+```
+
+
+
+
+visualize data
+unconditional growth model - baseline
+
+```{r}
+carbon.imp$field <- carbon.imp$ï..Field
+#head(carbon.imp)
+mod1 <- lme(Org.C~1, random = ~1|field, data = carbon.imp, method="ML") #maximum likelihood method
+summary(mod1)
+#log likelihood = -71.20694 , we want this to decrease as we improve model
+intervals(mod1)
+#calculate intra-class correlation coefficient (ICC) for the unconditional means model
+(0.2851438^2) / ((0.2851438^2) + (0.2660475^2))
+#above .05 implies clustering is taking place
+#we got 0.534604
+#we expect this with the different crops
+
+
+
+```
+stddev intercept = 0.2873592  residual = 0.2653994  
+can provide clustering info  
+intercept p value is 0 so this is significant  
+
+
+
+
+
+setting up slope with years
+ID=field
+```{r}
+xyplot(Org.C ~ carbon.imp$time | field, data = carbon.imp, type = c("p","r"))
+
+#treat  time with fixed slope
+mod2 <- lme(Org.C ~ time, random =~1  | field, data = carbon.imp, method = "ML")
+summary(mod2) #log like here = -52.74155	, decreased a decent amount
+#time is definitely significant pval=0
+intervals(mod2)
+
+#treat time with non fixed slope
+mod3 <- lme(Org.C ~ time, random =~time  | field, data = carbon.imp, method = "ML")
+summary(mod3) #log lik = -46.92106	slightly better
+intervals(mod3)
+
+#deviance statistics
+(results <- anova(mod1,mod2))
+
+(results2 <- anova(mod2,mod3)) #very significantly different models, this is good
+
+#calculate ICC for mod3
+(0.00642326^2)/((0.00642326^2)+(0.24884009^2))
+#0.0006658571 not much clustering
+
+```
+re-impute -Work in progress but not significant for presentation 
+```{r}
+
+# m <- 5
+# carbon.i <- mice(carbon, m , maxit = 20)
+# 
+# carbon.imp <- complete(carbon.i,1)
+# 
+# summary(carbon.imp)
+# #aggr(carbon.imp) #no more missing values
+# 
+# #combine the data sets
+# fit <- with(data=carbon.i, exp=lme(Org.C ~ Years.S.1976 + Crop , random =~Years.S.1976 | field) )
+# 
+# summary(pool(fit))
+# 
+# #carbon.imp
+# all <- complete(carbon.i, action = "all")
+# # head(all)
+# # head(all[[1]])
+# mean()
+                 
+
+```
+
+
+
+
+model with variables
+```{r}
+#attach(carbon.imp)
+#xyplot(Org.C ~ Years.S.1976+Crop | field, data = carbon.imp, type = c("p","r") )
+mod4 <- lme(Org.C ~ time + Crop , random =~time | field, data = carbon.imp, method = "ML")
+summary(mod4)
+intervals(mod4)
+
+```
+compare mod4 and mod3
+```{r}
+results <- anova(mod3, mod4)
+results
+results$`p-value`
+```
+
+models with interaction
+```{r}
+#mod5 <- lmer(Org.C ~ time + Crop + switched + time*Crop + (time|field), data = carbon.imp, REML = F)
+#summary(mod5)
+ctrl <- lmeControl(opt='optim')
+
+mod6 <- lme(Org.C ~ time + Crop + time*Crop, random =~time | field, control = ctrl, data = carbon.imp, method = "ML")
+summary(mod6)
+#mod 6 could be overfitting
+```
+
+```{r}
+
+mod7 <- lme(Org.C ~ (time + Crop)^2 , random =~time | field, control = ctrl, data = carbon.imp, method = "ML")
+summary(mod7)
+
+```
+
+compare mod6 and mod 4
+```{r}
+results2 <- anova(mod4, mod6)
+results2
+results2$`p-value`
+
+```
+
+
+
+want to visualize by crop
+```{r}
+#attach(carbon.imp)
+xyplot(Org.C ~ time | Crop, data = carbon.imp, type = c("p","r"))
+modcrop <- lme(Org.C ~ time , random=~time| Crop, data=carbon.imp, method = "ML")
+summary(modcrop)
+#this is not a good model to measure by but decent to visualize by crop
+```
+
+Visualize Carbon per Year by Crop type
+```{r}
+
+
+interaction.plot(
+  carbon.imp$time,
+  carbon.imp$Crop,
+  carbon.imp$Org.C,
+  col = c("brown", "black", "blue", "green", "red", "cyan"),
+  ylab = "Carbon %",
+  xlab = "Years Since 1976",
+  trace.label = "Crop Type"
+)
+```
+
+Pasture seems to random, it only means that live stock are living on the field, there is no information about what animal or how many. Yet, this is the only single "Crop" that individually shows significance in the model.
+
+
+cross validation
+```{r}
+ind <- sample(370, 93)
+train_cv <- carbon.imp[ind,]
+test_cv <- carbon.imp[-ind,]
+str(train_cv)
+
+# mse_vec <- c()
+# mindev_vec <- c(0.0001,0.001,0.01,0.1,0.25,0.5,0.75)
+# mindev_vec <- seq(0.0001,0.2, length = 100)
+# for (i in 1:length(mindev_vec)){
+# mod_train <- tree(Org.C ~ time + Crop , data = train_cv, mindev = mindev_vec[i])
+# preds <- predict(mod_train, newdata = train_cv)
+# train_cv$preds <- preds
+# #plot(train_cv$Org.C,train_cv$preds)
+# 
+# 
+# mse_vec[i] <- sqrt(mean((train_cv$Salary - train_cv$preds)^2))
+# }
+# plot(mindev_vec, mse_vec, pch = 16, col = "coral", type= "l")
+# mse_vec
+
+# k <- 5
+# swiss$k <- sample(1:k, nrow(swiss), replace = TRUE)
+# 
+# for (i in 1:k){
+# mod4 <- mod4 <- lme(Org.C ~ time + Crop , random =~time | field, ,data = subset(swiss, k != i))
+# swiss$y_hat_mod1[swiss$k == i] <- predict(mod4, subset(swiss, k == i))
+# }
+
+
+```
+
+
+
+
+
